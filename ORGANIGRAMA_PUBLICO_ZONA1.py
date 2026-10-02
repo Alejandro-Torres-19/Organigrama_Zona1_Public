@@ -183,54 +183,52 @@ components.html(
 
 st.markdown("---")
 
-#SECCIÓN LISTA GENERAL TAREAS
+# SECCIÓN LISTA GENERAL DE TAREAS
 st.subheader("📋 Lista General de Tareas")
 
 if df_actividades is not None and not df_actividades.empty:
-    for idx, row in df_actividades.iterrows():
-        val_est = str(row.get("Estado", row.get("Finalizada", ""))).strip().lower()
-        is_finalizada = val_est in ["completada", "true"]
-        inicio_raw = str(row.get("Inicio", ""))
-        titulo_act = str(row.get("Actividad", ""))
+  for idx, row in df_actividades.iterrows():
+    val_est = str(row.get("Estado", row.get("Finalizada", ""))).strip().lower()
+    is_finalizada = val_est in ["completada", "true"]
+    inicio_raw = str(row.get("Inicio", ""))
+    titulo_act = str(row.get("Actividad", ""))
 
-        if "T" in inicio_raw:
-            partes = inicio_raw.split("T")
-            try:
-                fecha_fmt = pd.to_datetime(partes[0]).strftime("%d/%m/%Y")
-            except:
-                fecha_fmt = partes[0]
-            hora_fmt = partes [1][:5]
-        elif "" in inicio_raw:
-            partes = inicio_raw.split()
-            try:
-                fecha_fmt = pd.to_datetime(partes[0]).strftime("%d/%m/%Y")
-            except:
-                fecha_fmt = partes[0]
-            hora_fmt = partes [1][:5]
-        else:
-            try:
-                fecha_fmt = pd.to_datetime(inicio_raw).strftime("%d/%m/%Y")
-            except:
-                fecha_fmt = inicio_raw
-            hora_fmt = ""
+    fecha_fmt = inicio_raw
+    hora_fmt = ""
 
-        c1, c2, c3, c4 = st.columns([0.25, 0.2, 0.4, 0.15])
+    try:
+      if "T" in inicio_raw:
+        partes = inicio_raw.split("T")
+        fecha_fmt = pd.to_datetime(partes[0]).strftime("%d-%m-%Y")
+        if len(partes) > 1 and len(partes[1]) >= 5:
+          hora_fmt = partes[1][:5]
+      elif " " in inicio_raw:
+        partes = inicio_raw.split(" ")
+        fecha_fmt = pd.to_datetime(partes[0]).strftime("%d-%m-%Y")
+        if len(partes) > 1 and len(partes[1]) >= 5:
+          hora_fmt = partes[1][:5]
+      else:
+        fecha_fmt = pd.to_datetime(inicio_raw).strftime("%d-%m-%Y")
+    except Exception:
+      # Si ocurre cualquier error de formato, dejamos los valores en crudo sin romper la app
+      pass
 
-        with c1:
-            st.write(f"**{fecha_fmt}**")
-        with c2:
-            st.write(hora_fmt if hora_fmt else "")
-        with c3:
-            st.write(titulo_act)
-        with c4:
-            if is_finalizada:
-                st.markdown("🟢 **Completada**")
-            else:
-                st.markdown("🟡 **Pendiente**")
-            st.divider()
+    c1, c2, c3, c4 = st.columns([0.25, 0.2, 0.4, 0.15])
 
-    else:
-        st.info("No hay tareas registradas")
+    with c1:
+      st.write(f"**{fecha_fmt}**")
+    with c2:
+      st.write(hora_fmt if hora_fmt else "--:--")
+    with c3:
+      st.write(titulo_act)
+    with c4:
+      if is_finalizada:
+        st.markdown("🟢 **Completada**")
+      else:
+        st.markdown("🟡 **Pendiente**")
+    st.divider()
+else:
+  st.info("No hay tareas registradas")
 
 
 
