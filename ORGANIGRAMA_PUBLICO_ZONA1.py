@@ -26,19 +26,19 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-#CONEXIÓN A GOOGLE SHEETS
+# CONEXIÓN GOOGLE SHEETS
 @st.cache_resource
-def conectar_google_sheets():
-    scope =[
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive",
-    ]
+def conectar_google_sheets() -> gspread.Worksheet:
+  scope = [
+      "https://spreadsheets.google.com/feeds",
+      "https://www.googleapis.com/auth/drive",
+  ]
+  # Convertimos los secretos de Streamlit a un diccionario estándar de Python
+  creds_dict = dict(st.secrets["gcp_service_account"])
 
-    creds_dict = dict(st.secrets["gcp_service_account"])
-    creds = ServiceAccountCredentials.from_json_keyfile_name(creds_dict, scope)
-    client = gspread.authorize(creds)
-    sheet = client.open("ORGANIGRAMA_ZONA1")
-    return sheet
+  # Usamos el método nativo de gspread para conectar directo desde el diccionario
+  client = gspread.service_account_from_dict(creds_dict)
+  return client.open("ORGANIGRAMA_ZONA1").sheet1
 
 st.title("📅 CRONOGRAMA ZONA 1 📅")
 
