@@ -201,7 +201,7 @@ if df_actividades is not None and not df_actividades.empty:
                 fecha_fmt = partes[0]
             hora_fmt = partes [1][:5]
         elif "" in inicio_raw:
-            partes = inicio_raw.split("")
+            partes = inicio_raw.split()
             try:
                 fecha_fmt = pd.to_datetime(partes[0]).strftime("%d/%m/%Y")
             except:
