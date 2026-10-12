@@ -31,6 +31,7 @@ def conectar_gspread():
 
 try:
     spreadsheet = conectar_gspread()
+    sheet_principal = spreadsheet.get_worksheet(0) # Hoja 1 del Admin (General)
 except Exception as e:
     st.error(f"Error al conectar con Google Sheets: {e}")
     st.stop()
@@ -48,7 +49,6 @@ if st.session_state["escuela_seleccionada"] is None:
             st.markdown("<p style='text-align: center; color: gray;'>Sistema de Seguimiento y Control de Planteles</p>", unsafe_allow_html=True)
             st.markdown("---")
             
-            # Opciones de las 12 escuelas con nombres exactos en mayúsculas como en Google Sheets
             opciones_escuelas = [f"ESCUELA {i}" for i in range(1, 13)]
             plantel_elegido = st.selectbox("🏫 Selecciona tu Plantel", opciones_escuelas)
             
@@ -58,7 +58,7 @@ if st.session_state["escuela_seleccionada"] is None:
                 st.rerun()
     st.stop()
 
-# Una vez seleccionada la escuela, obtenemos su nombre
+# Nombre de la pestaña de la escuela seleccionada
 nombre_pestana_escuela = st.session_state["escuela_seleccionada"]
 
 try:
@@ -70,7 +70,7 @@ except Exception as e:
         st.rerun()
     st.stop()
 
-# --- BARRA LATERAL PARA CAMBIAR DE PLANTEL O SALIR ---
+# --- BARRA LATERAL PARA CAMBIAR DE PLANTEL ---
 with st.sidebar:
     st.image("https://img.icons8.com/color/96/school.png", width=80)
     st.title("Portal Escolar")
@@ -80,36 +80,87 @@ with st.sidebar:
         st.session_state["escuela_seleccionada"] = None
         st.rerun()
 
-# --- CARGAR Y DEPURAR DATOS DE LA ESCUELA ---
-def cargar_datos_escuela():
-    data = sheet_escuela.get_all_records()
-    if not data:
-        df = pd.DataFrame(columns=["Actividad", "Fecha Inicio", "Fecha Fin", "Privado", "Estado"])
-    else:
-        df = pd.DataFrame(data)
-        df.columns = [str(col).strip() for col in df.columns]
-        
-        for col in ["Actividad", "Fecha Inicio", "Fecha Fin", "Privado", "Estado"]:
-            if col not in df.columns:
-                match = [c for c in df.columns if col.lower().replace(" ", "") in c.lower().replace(" ", "")]
-                if match:
-                    df.rename(columns={match[0]: col}, inplace=True)
-                else:
-                    df[col] = ""
-                    
-        df["Fecha Inicio"] = df["Fecha Inicio"].astype(str).str.split("T").str[0].str.strip()
-        
-        col_fin_real = next((c for c in df.columns if "fin" in c.lower()), "Fecha Fin")
-        if col_fin_real != "Fecha Fin":
-            df.rename(columns={col_fin_real: "Fecha Fin"}, inplace=True)
-            
-        df["Fecha Fin"] = df["Fecha Fin"].astype(str).str.split("T").str[0].str.strip()
-        df["Fecha Fin"] = df["Fecha Fin"].replace(["", "nan", "NaT", "None"], pd.NA)
-        df["Fecha Fin"] = df["Fecha Fin"].fillna(df["Fecha Inicio"])
-        
-    return df
+# --- CARGAR TAREAS PÚBLICAS DE LA HOJA PRINCIPAL Y CRUZARLAS CON EL ESTATUS DE LA ESCUELA ---
+def cargar_datos_sincronizados():
+    # 1. Leer la Hoja Principal del Admin para extraer tareas públicas
+    data_admin = sheet_principal.get_all_records()
+    if not data_admin:
+        return pd.DataFrame(columns=["Actividad", "Fecha Inicio", "Fecha Fin", "Privado", "Estado", "Fila_Admin"])
+    
+    df_admin = pd.DataFrame(data_admin)
+    df_admin.columns = [str(col).strip() for col in df_admin.columns]
+    
+    # Asegurar columnas base en admin
+    for col in ["Actividad", "Fecha Inicio", "Fecha Fin", "Privado", "Estado"]:
+        if col not in df_admin.columns:
+            match = [c for c in df_admin.columns if col.lower().replace(" ", "") in c.lower().replace(" ", "")]
+            if match:
+                df_admin.rename(columns={match[0]: col}, inplace=True)
+            else:
+                df_admin[col] = ""
 
-df_tareas_escuela = cargar_datos_escuela()
+    # Filtrar estrictamente las tareas que NO son privadas (Públicas para escuelas)
+    # Maneja variantes como FALSE, False, "FALSE", "No", etc.
+    def es_publica(val):
+        v = str(val).strip().lower()
+        return v in ["false", "no", "0", "f"]
+
+    df_publicas = df_admin[df_admin["Privado"].apply(es_publica)].copy()
+    
+    if df_publicas.empty:
+        return pd.DataFrame(columns=["Actividad", "Fecha Inicio", "Fecha Fin", "Privado", "Estado", "Fila_Admin"])
+
+    # Guardar la fila real de la hoja principal (índice + 2 por los encabezados)
+    df_publicas["Fila_Admin"] = df_publicas.index + 2
+
+    # 2. Leer los registros propios de la escuela para ver si ya marcó alguna como completada
+    data_escuela = sheet_escuela.get_all_records()
+    df_escuela_registros = pd.DataFrame(data_escuela) if data_escuela else pd.DataFrame(columns=["Actividad", "Estado"])
+    
+    if not df_escuela_registros.empty:
+        df_escuela_registros.columns = [str(col).strip() for col in df_escuela_registros.columns]
+        # Crear un diccionario rápido de la actividad con su estatus en la escuela
+        estatus_map = {}
+        for _, row_esc in df_escuela_registros.iterrows():
+            act_nombre = str(row_esc.get("Actividad", "")).strip()
+            est_val = str(row_esc.get("Estado", "Pendiente")).strip()
+            estatus_map[act_nombre] = est_val
+        
+        # Asignar el estado específico de la escuela a las tareas públicas
+        df_publicas["Estado"] = df_publicas["Actividad"].apply(lambda x: estatus_map.get(str(x).strip(), "Pendiente"))
+    else:
+        df_publicas["Estado"] = "Pendiente"
+
+    # Depurar fechas
+    df_publicas["Fecha Inicio"] = df_publicas["Fecha Inicio"].astype(str).str.split("T").str[0].str.strip()
+    col_fin_real = next((c for c in df_publicas.columns if "fin" in c.lower()), "Fecha Fin")
+    if col_fin_real != "Fecha Fin":
+        df_publicas.rename(columns={col_fin_real: "Fecha Fin"}, inplace=True)
+    df_publicas["Fecha Fin"] = df_publicas["Fecha Fin"].astype(str).str.split("T").str[0].str.strip()
+    df_publicas["Fecha Fin"] = df_publicas["Fecha Fin"].replace(["", "nan", "NaT", "None"], pd.NA)
+    df_publicas["Fecha Fin"] = df_publicas["Fecha Fin"].fillna(df_publicas["Fecha Inicio"])
+
+    return df_publicas
+
+df_tareas_escuela = cargar_datos_sincronizados()
+
+# --- FUNCIÓN AUXILIAR PARA GUARDAR EL ESTATUS EN LA HOJA DE LA ESCUELA ---
+def actualizar_estado_escuela(nombre_actividad, nuevo_estado, f_inicio, f_fin):
+    data_esc = sheet_escuela.get_all_records()
+    df_esc = pd.DataFrame(data_esc) if data_esc else pd.DataFrame()
+    
+    encontrado = False
+    if not df_esc.empty and "Actividad" in df_esc.columns:
+        for idx, row in df_esc.iterrows():
+            if str(row["Actividad"]).strip() == str(nombre_actividad).strip():
+                # Actualizar celda de estado (columna 5)
+                sheet_escuela.update_cell(idx + 2, 5, nuevo_estado)
+                encontrado = True
+                break
+                
+    if not encontrado:
+        # Si la escuela aún no tenía registrada esta tarea en su pestaña, la agregamos
+        sheet_escuela.append_row([nombre_actividad, f_inicio, f_fin, "FALSE", nuevo_estado])
 
 # --- FUNCIÓN AUXILIAR PARA FORMATEAR FECHAS A DD-MM-YY ---
 def formatear_fecha_corta(fecha_val):
@@ -123,7 +174,7 @@ def formatear_fecha_corta(fecha_val):
 
 # --- TÍTULO PRINCIPAL ---
 st.title(f"🏫 Panel de Seguimiento - {nombre_pestana_escuela}")
-st.markdown("Consulta tus actividades asignadas, revisa fechas límite y marca tu progreso de cumplimiento.")
+st.markdown("Consulta tus actividades públicas asignadas por la supervisión, revisa fechas límite y marca tu progreso.")
 
 hoy_date_obj = date.today()
 hoy_dt = pd.Timestamp(hoy_date_obj).normalize()
@@ -133,7 +184,6 @@ if not df_tareas_escuela.empty:
     df_tareas_escuela["Fecha_Fin_dt"] = pd.to_datetime(df_tareas_escuela["Fecha Fin"].astype(str).str.split("T").str[0], errors='coerce').dt.normalize()
     df_tareas_escuela["Fecha_Fin_dt"] = df_tareas_escuela["Fecha_Fin_dt"].fillna(df_tareas_escuela["Fecha_Inicio_dt"])
     
-    # Filtrar por categorías de prioridad (Atrasadas y Pendientes hasta arriba)
     atrasadas_df = df_tareas_escuela[
         (df_tareas_escuela["Fecha_Fin_dt"] < hoy_dt) & 
         (df_tareas_escuela["Estado"].str.lower() != "completada")
@@ -150,7 +200,7 @@ if not df_tareas_escuela.empty:
         (df_tareas_escuela["Estado"].str.lower() != "completada")
     ]
 
-    # --- 1. ACTIVIDADES ATRASADAS (MÁXIMA PRIORIDAD ARRIBA) ---
+    # --- 1. ACTIVIDADES ATRASADAS ---
     if not atrasadas_df.empty:
         st.markdown("### ⚠️ Actividades Atrasadas")
         for idx, row in atrasadas_df.iterrows():
@@ -170,7 +220,7 @@ if not df_tareas_escuela.empty:
                     st.markdown("🔴 Atrasada", unsafe_allow_html=True)
                 with col_p3:
                     if st.button("✔️ Marcar Hecho", key=f"btn_esc_atrasada_{orig_idx}"):
-                        sheet_escuela.update_cell(orig_idx + 2, 5, "Completada")
+                        actualizar_estado_escuela(row["Actividad"], "Completada", row["Fecha Inicio"], row["Fecha Fin"])
                         st.success("¡Completada!")
                         st.rerun()
 
@@ -194,7 +244,7 @@ if not df_tareas_escuela.empty:
                     st.markdown("🟠 Pendiente Hoy", unsafe_allow_html=True)
                 with col_h3:
                     if st.button("✔️ Marcar Hecho", key=f"btn_esc_hoy_{orig_idx}"):
-                        sheet_escuela.update_cell(orig_idx + 2, 5, "Completada")
+                        actualizar_estado_escuela(row["Actividad"], "Completada", row["Fecha Inicio"], row["Fecha Fin"])
                         st.success("¡Completada!")
                         st.rerun()
 
@@ -218,7 +268,7 @@ if not df_tareas_escuela.empty:
                     st.markdown("🔵 Programada", unsafe_allow_html=True)
                 with col_f3:
                     if st.button("✔️ Marcar Hecho", key=f"btn_esc_futura_{orig_idx}"):
-                        sheet_escuela.update_cell(orig_idx + 2, 5, "Completada")
+                        actualizar_estado_escuela(row["Actividad"], "Completada", row["Fecha Inicio"], row["Fecha Fin"])
                         st.success("¡Completada!")
                         st.rerun()
 
@@ -286,6 +336,4 @@ if not df_tareas_escuela.empty:
     calendar(events=calendar_events, options=calendar_options)
 
 else:
-    st.info("No hay actividades registradas en la hoja de esta escuela.")
-
-
+    st.info("No hay actividades públicas registradas por el administrador en este momento.")
