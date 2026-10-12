@@ -2,6 +2,7 @@ from datetime import datetime, date
 import streamlit as st
 import pandas as pd
 from streamlit_calendar import calendar
+import plotly.graph_objects as go
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -79,7 +80,7 @@ with st.sidebar:
     
     menu_portal = st.radio(
         "Navegación",
-        ["📌 Actividades y Calendario", "✅ Mis Tareas Completadas", "📊 Avance y Competencia Zona"]
+        ["📌 Actividades y Calendario", "✅ Mis Tareas Completadas", "📊 Avance de la Zona"]
     )
     
     st.markdown("---")
@@ -168,6 +169,35 @@ def formatear_fecha_corta(fecha_val):
 
 hoy_date_obj = date.today()
 hoy_dt = pd.Timestamp(hoy_date_obj).normalize()
+
+# --- FUNCIÓN PARA GENERAR GRÁFICA CIRCULAR TIPO DONA ---
+def crear_grafica_dona(porcentaje, titulo_centro=""):
+    completado = porcentaje
+    pendiente = 100 - porcentaje
+    
+    # Si está a 0%, aseguramos que todo sea rojo (#dc3545) y verde (#198754) si hay avance
+    colores = ['#198754', '#dc3545'] if completado > 0 else ['#dc3545', '#ffffff00']
+    
+    fig = go.Figure(data=[go.Pie(
+        values=[completado, pendiente if completado > 0 else 100],
+        labels=['Completado', 'Pendiente'],
+        hole=0.6,
+        marker=dict(colors=['#198754', '#dc3545']),
+        textinfo='none',
+        hoverinfo='none'
+    )])
+    
+    fig.update_layout(
+        showlegend=False,
+        margin=dict(t=10, b=10, l=10, r=10),
+        height=220,
+        annotations=[dict(
+            text=f"<b>{completado}%</b><br><span style='font-size:12px; color:gray;'>{titulo_centro}</span>",
+            x=0.5, y=0.5, font_size=18, showarrow=False
+        )]
+    )
+    return fig
+
 
 # ==========================================
 # SECCIÓN 1: ACTIVIDADES Y CALENDARIO
@@ -346,11 +376,11 @@ elif menu_portal == "✅ Mis Tareas Completadas":
 
 
 # ==========================================
-# SECCIÓN 3: AVANCE Y COMPETENCIA ZONA
+# SECCIÓN 3: AVANCE DE LA ZONA
 # ==========================================
-elif menu_portal == "📊 Avance y Competencia Zona":
-    st.title("📊 Indicadores de Avance y Competencia - Zona 1")
-    st.markdown("Compara tu rendimiento con el de los demás planteles y mantén el liderazgo en la zona.")
+elif menu_portal == "📊 Avance de la Zona":
+    st.title("📊 Indicadores de Avance - Zona 1")
+    st.markdown("Monitorea tu rendimiento y el de los demás planteles de la zona.")
 
     # Calcular porcentajes de todas las escuelas en tiempo real
     avances_zona = []
@@ -373,48 +403,39 @@ elif menu_portal == "📊 Avance y Competencia Zona":
         avances_zona.append({"Escuela": p_name, "Porcentaje": porcentaje_esc, "Es_Actual": is_current})
 
     df_avances_zona = pd.DataFrame(avances_zona)
-
-    # Obtener el porcentaje de la escuela actual
     mi_porcentaje = df_avances_zona[df_avances_zona["Es_Actual"]]["Porcentaje"].values[0]
 
-    # --- MÉTRICA / TARJETA PRINCIPAL DEL PLANTEL ---
+    # --- GRÁFICA CIRCULAR PRINCIPAL (TU PLANTEL) ---
     st.subheader(f"🎯 Tu Progreso Actual: {nombre_pestana_escuela}")
     
-    col_m1, col_m2 = st.columns([1.5, 2.5])
-    with col_m1:
-        st.metric(label="Porcentaje de Cumplimiento", value=f"{mi_porcentaje}%")
-    with col_m2:
-        st.progress(mi_porcentaje / 100)
+    col_g1, col_g2 = st.columns([1.2, 2.8])
+    with col_g1:
+        fig_mi_escuela = crear_grafica_dona(mi_porcentaje, "avance general")
+        st.plotly_chart(fig_mi_escuela, use_container_width=True)
+    with col_g2:
+        st.markdown("<br>", unsafe_allow_html=True)
         if mi_porcentaje == 100:
-            st.success("🎉 ¡Felicidades! Has alcanzado el 100% de cumplimiento.")
+            st.success("🎉 ¡Felicidades! Has alcanzado el 100% de cumplimiento en tus actividades asignadas.")
         elif mi_porcentaje >= 70:
-            st.warning("🔥 ¡Excelente ritmo! Estás muy cerca de la meta.")
+            st.warning("🔥 ¡Excelente ritmo! Estás muy cerca de la meta establecida.")
         else:
-            st.info("💪 ¡Aún hay tiempo! Revisa tus pendientes y ponte al corriente.")
+            st.info("💪 ¡Aún hay tiempo! Revisa tus pendientes en el panel principal y ponte al corriente.")
 
     st.markdown("---")
 
-    # --- SECCIÓN DE COMPETENCIA SANA (GRÁFICA DE BARRAS DE LA ZONA) ---
-    st.markdown("### 🏆 Tabla de Posiciones y Avance de la Zona 1")
-    st.markdown("Visualiza el estatus de cumplimiento de todos los planteles participantes:")
+    # --- SECCIÓN DE AVANCE DE LA ZONA 1 (GALERÍA DE GRÁFICAS CIRCULARES) ---
+    st.markdown("### 📈 Avance de la Zona 1")
+    st.markdown("Estatus de cumplimiento de todos los planteles de la zona:")
 
-    # Ordenar de mayor a menor porcentaje para la competencia sana
-    df_ranking = df_avances_zona.sort_values(by="Porcentaje", ascending=False).reset_index(drop=True)
-
-    # Mostrar gráfico de barras horizontales limpio
-    st.bar_chart(df_ranking.set_index("Escuela")[["Porcentaje"]], horizontal=True)
-
-    # Tabla detallada transparente
-    st.markdown("#### Detalle por Plantel")
-    
-    # Destacar visualmente la fila del plantel actual en la tabla
-    def destacar_actual(row):
-        if row["Escuela"] == nombre_pestana_escuela:
-            return ['background-color: #d4edda; font-weight: bold'] * len(row)
-        return [''] * len(row)
-
-    st.dataframe(
-        df_ranking[["Escuela", "Porcentaje"]].style.apply(destacar_actual, axis=1),
-        use_container_width=True,
-        hide_index=True
-    )
+    # Mostrar las 12 escuelas en una cuadrícula de 3 columnas con gráficas circulares
+    cols = st.columns(3)
+    for idx, row in df_avances_zona.iterrows():
+        esc_nombre = row["Escuela"]
+        esc_porc = row["Porcentaje"]
+        
+        with cols[idx % 3]:
+            with st.container(border=True):
+                # Si es la escuela actual, resaltamos el título con un ícono especial
+                titulo_etiqueta = f"⭐ {esc_nombre}" if esc_nombre == nombre_pestana_escuela else esc_nombre
+                fig_dona = crear_grafica_dona(esc_porc, esc_nombre)
+                st.plotly_chart(fig_dona, use_container_width=True)
