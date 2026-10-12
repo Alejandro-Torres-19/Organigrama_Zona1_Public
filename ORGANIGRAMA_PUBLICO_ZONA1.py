@@ -35,24 +35,50 @@ except Exception as e:
     st.error(f"Error al conectar con Google Sheets: {e}")
     st.stop()
 
-# --- SELECTOR DE ESCUELA (MENÚ DESPLEGABLE INICIAL) ---
-st.sidebar.image("https://img.icons8.com/color/96/school.png", width=80)
-st.sidebar.title("Portal de Escuelas")
-st.sidebar.markdown("---")
+# --- SISTEMA DE SELECCIÓN DE ESCUELA (ESTILO TARJETA CENTRAL TIPO LOGIN) ---
+if "escuela_seleccionada" not in st.session_state:
+    st.session_state["escuela_seleccionada"] = None
 
-# Diccionario de las 12 escuelas de la Zona 1
-escuelas_disponibles = {f"Escuela {i}": f"Escuela_{i}" for i in range(1, 13)}
-escuela_seleccionada_nombre = st.sidebar.selectbox("🏫 Selecciona tu Plantel", list(escuelas_disponibles.keys()))
-nombre_pestana_escuela = escuelas_disponibles[escuela_seleccionada_nombre]
+if st.session_state["escuela_seleccionada"] is None:
+    _, col_centro, _ = st.columns([1, 1.5, 1])
+    with col_centro:
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown("<h2 style='text-align: center;'>🏫 Portal Escolar - Zona 1</h2>", unsafe_allow_html=True)
+            st.markdown("<p style='text-align: center; color: gray;'>Sistema de Seguimiento y Control de Planteles</p>", unsafe_allow_html=True)
+            st.markdown("---")
+            
+            # Opciones de las 12 escuelas con nombres exactos en mayúsculas como en Google Sheets
+            opciones_escuelas = [f"ESCUELA {i}" for i in range(1, 13)]
+            plantel_elegido = st.selectbox("🏫 Selecciona tu Plantel", opciones_escuelas)
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🚀 Entrar al Panel", use_container_width=True):
+                st.session_state["escuela_seleccionada"] = plantel_elegido
+                st.rerun()
+    st.stop()
+
+# Una vez seleccionada la escuela, obtenemos su nombre
+nombre_pestana_escuela = st.session_state["escuela_seleccionada"]
 
 try:
     sheet_escuela = spreadsheet.worksheet(nombre_pestana_escuela)
 except Exception as e:
     st.error(f"No se encontró la pestaña '{nombre_pestana_escuela}' en el archivo de Google Sheets. Por favor, verifícalo.")
+    if st.button("🔄 Cambiar de Plantel"):
+        st.session_state["escuela_seleccionada"] = None
+        st.rerun()
     st.stop()
 
-st.sidebar.markdown("---")
-st.sidebar.info(f"Conectado a: **{escuela_seleccionada_nombre}**\n\n*(Nota futura: Autenticación por CCT y Contraseña en desarrollo)*")
+# --- BARRA LATERAL PARA CAMBIAR DE PLANTEL O SALIR ---
+with st.sidebar:
+    st.image("https://img.icons8.com/color/96/school.png", width=80)
+    st.title("Portal Escolar")
+    st.markdown(f"Conectado a: **{nombre_pestana_escuela}**")
+    st.markdown("---")
+    if st.button("🔄 Cambiar de Plantel", use_container_width=True):
+        st.session_state["escuela_seleccionada"] = None
+        st.rerun()
 
 # --- CARGAR Y DEPURAR DATOS DE LA ESCUELA ---
 def cargar_datos_escuela():
@@ -96,7 +122,7 @@ def formatear_fecha_corta(fecha_val):
         return str(fecha_val).split("T")[0]
 
 # --- TÍTULO PRINCIPAL ---
-st.title(f"🏫 Panel de Seguimiento - {escuela_seleccionada_nombre}")
+st.title(f"🏫 Panel de Seguimiento - {nombre_pestana_escuela}")
 st.markdown("Consulta tus actividades asignadas, revisa fechas límite y marca tu progreso de cumplimiento.")
 
 hoy_date_obj = date.today()
@@ -122,10 +148,6 @@ if not df_tareas_escuela.empty:
     futuras_df = df_tareas_escuela[
         (df_tareas_escuela["Fecha_Inicio_dt"] > hoy_dt) & 
         (df_tareas_escuela["Estado"].str.lower() != "completada")
-    ]
-
-    completadas_df = df_tareas_escuela[
-        df_tareas_escuela["Estado"].str.lower() == "completada"
     ]
 
     # --- 1. ACTIVIDADES ATRASADAS (MÁXIMA PRIORIDAD ARRIBA) ---
