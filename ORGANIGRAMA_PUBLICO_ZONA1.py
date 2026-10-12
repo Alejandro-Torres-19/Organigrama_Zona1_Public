@@ -70,11 +70,18 @@ except Exception as e:
         st.rerun()
     st.stop()
 
-# --- BARRA LATERAL PARA CAMBIAR DE PLANTEL ---
+# --- BARRA LATERAL: NAVEGACIÓN Y CAMBIO DE PLANTEL ---
 with st.sidebar:
     st.image("https://img.icons8.com/color/96/school.png", width=80)
     st.title("Portal Escolar")
     st.markdown(f"Conectado a: **{nombre_pestana_escuela}**")
+    st.markdown("---")
+    
+    menu_portal = st.radio(
+        "Navegación",
+        ["📌 Actividades y Calendario", "✅ Mis Tareas Completadas", "📊 Avance y Competencia Zona"]
+    )
+    
     st.markdown("---")
     if st.button("🔄 Cambiar de Plantel", use_container_width=True):
         st.session_state["escuela_seleccionada"] = None
@@ -82,7 +89,6 @@ with st.sidebar:
 
 # --- CARGAR TAREAS PÚBLICAS DE LA HOJA PRINCIPAL Y CRUZARLAS CON EL ESTATUS DE LA ESCUELA ---
 def cargar_datos_sincronizados():
-    # 1. Leer la Hoja Principal del Admin para extraer tareas públicas
     data_admin = sheet_principal.get_all_records()
     if not data_admin:
         return pd.DataFrame(columns=["Actividad", "Fecha Inicio", "Fecha Fin", "Privado", "Estado", "Fila_Admin"])
@@ -90,7 +96,6 @@ def cargar_datos_sincronizados():
     df_admin = pd.DataFrame(data_admin)
     df_admin.columns = [str(col).strip() for col in df_admin.columns]
     
-    # Asegurar columnas base en admin
     for col in ["Actividad", "Fecha Inicio", "Fecha Fin", "Privado", "Estado"]:
         if col not in df_admin.columns:
             match = [c for c in df_admin.columns if col.lower().replace(" ", "") in c.lower().replace(" ", "")]
@@ -99,8 +104,6 @@ def cargar_datos_sincronizados():
             else:
                 df_admin[col] = ""
 
-    # Filtrar estrictamente las tareas que NO son privadas (Públicas para escuelas)
-    # Maneja variantes como FALSE, False, "FALSE", "No", etc.
     def es_publica(val):
         v = str(val).strip().lower()
         return v in ["false", "no", "0", "f"]
@@ -110,28 +113,23 @@ def cargar_datos_sincronizados():
     if df_publicas.empty:
         return pd.DataFrame(columns=["Actividad", "Fecha Inicio", "Fecha Fin", "Privado", "Estado", "Fila_Admin"])
 
-    # Guardar la fila real de la hoja principal (índice + 2 por los encabezados)
     df_publicas["Fila_Admin"] = df_publicas.index + 2
 
-    # 2. Leer los registros propios de la escuela para ver si ya marcó alguna como completada
     data_escuela = sheet_escuela.get_all_records()
     df_escuela_registros = pd.DataFrame(data_escuela) if data_escuela else pd.DataFrame(columns=["Actividad", "Estado"])
     
     if not df_escuela_registros.empty:
         df_escuela_registros.columns = [str(col).strip() for col in df_escuela_registros.columns]
-        # Crear un diccionario rápido de la actividad con su estatus en la escuela
         estatus_map = {}
         for _, row_esc in df_escuela_registros.iterrows():
             act_nombre = str(row_esc.get("Actividad", "")).strip()
             est_val = str(row_esc.get("Estado", "Pendiente")).strip()
             estatus_map[act_nombre] = est_val
         
-        # Asignar el estado específico de la escuela a las tareas públicas
         df_publicas["Estado"] = df_publicas["Actividad"].apply(lambda x: estatus_map.get(str(x).strip(), "Pendiente"))
     else:
         df_publicas["Estado"] = "Pendiente"
 
-    # Depurar fechas
     df_publicas["Fecha Inicio"] = df_publicas["Fecha Inicio"].astype(str).str.split("T").str[0].str.strip()
     col_fin_real = next((c for c in df_publicas.columns if "fin" in c.lower()), "Fecha Fin")
     if col_fin_real != "Fecha Fin":
@@ -144,7 +142,6 @@ def cargar_datos_sincronizados():
 
 df_tareas_escuela = cargar_datos_sincronizados()
 
-# --- FUNCIÓN AUXILIAR PARA GUARDAR EL ESTATUS EN LA HOJA DE LA ESCUELA ---
 def actualizar_estado_escuela(nombre_actividad, nuevo_estado, f_inicio, f_fin):
     data_esc = sheet_escuela.get_all_records()
     df_esc = pd.DataFrame(data_esc) if data_esc else pd.DataFrame()
@@ -153,16 +150,13 @@ def actualizar_estado_escuela(nombre_actividad, nuevo_estado, f_inicio, f_fin):
     if not df_esc.empty and "Actividad" in df_esc.columns:
         for idx, row in df_esc.iterrows():
             if str(row["Actividad"]).strip() == str(nombre_actividad).strip():
-                # Actualizar celda de estado (columna 5)
                 sheet_escuela.update_cell(idx + 2, 5, nuevo_estado)
                 encontrado = True
                 break
                 
     if not encontrado:
-        # Si la escuela aún no tenía registrada esta tarea en su pestaña, la agregamos
         sheet_escuela.append_row([nombre_actividad, f_inicio, f_fin, "FALSE", nuevo_estado])
 
-# --- FUNCIÓN AUXILIAR PARA FORMATEAR FECHAS A DD-MM-YY ---
 def formatear_fecha_corta(fecha_val):
     if not fecha_val or str(fecha_val).strip() == "":
         return ""
@@ -172,168 +166,255 @@ def formatear_fecha_corta(fecha_val):
     except:
         return str(fecha_val).split("T")[0]
 
-# --- TÍTULO PRINCIPAL ---
-st.title(f"🏫 Panel de Seguimiento - {nombre_pestana_escuela}")
-st.markdown("Consulta tus actividades públicas asignadas por la supervisión, revisa fechas límite y marca tu progreso.")
-
 hoy_date_obj = date.today()
 hoy_dt = pd.Timestamp(hoy_date_obj).normalize()
 
-if not df_tareas_escuela.empty:
-    df_tareas_escuela["Fecha_Inicio_dt"] = pd.to_datetime(df_tareas_escuela["Fecha Inicio"].astype(str).str.split("T").str[0], errors='coerce').dt.normalize()
-    df_tareas_escuela["Fecha_Fin_dt"] = pd.to_datetime(df_tareas_escuela["Fecha Fin"].astype(str).str.split("T").str[0], errors='coerce').dt.normalize()
-    df_tareas_escuela["Fecha_Fin_dt"] = df_tareas_escuela["Fecha_Fin_dt"].fillna(df_tareas_escuela["Fecha_Inicio_dt"])
+# ==========================================
+# SECCIÓN 1: ACTIVIDADES Y CALENDARIO
+# ==========================================
+if menu_portal == "📌 Actividades y Calendario":
+    st.title(f"🏫 Panel de Seguimiento - {nombre_pestana_escuela}")
+    st.markdown("Consulta tus actividades públicas asignadas por la supervisión, revisa fechas límite y marca tu progreso.")
+
+    if not df_tareas_escuela.empty:
+        df_tareas_escuela["Fecha_Inicio_dt"] = pd.to_datetime(df_tareas_escuela["Fecha Inicio"].astype(str).str.split("T").str[0], errors='coerce').dt.normalize()
+        df_tareas_escuela["Fecha_Fin_dt"] = pd.to_datetime(df_tareas_escuela["Fecha Fin"].astype(str).str.split("T").str[0], errors='coerce').dt.normalize()
+        df_tareas_escuela["Fecha_Fin_dt"] = df_tareas_escuela["Fecha_Fin_dt"].fillna(df_tareas_escuela["Fecha_Inicio_dt"])
+        
+        atrasadas_df = df_tareas_escuela[
+            (df_tareas_escuela["Fecha_Fin_dt"] < hoy_dt) & 
+            (df_tareas_escuela["Estado"].str.lower() != "completada")
+        ]
+        
+        hoy_df = df_tareas_escuela[
+            (df_tareas_escuela["Fecha_Inicio_dt"] <= hoy_dt) & 
+            (df_tareas_escuela["Fecha_Fin_dt"] >= hoy_dt) & 
+            (df_tareas_escuela["Estado"].str.lower() != "completada")
+        ]
+
+        futuras_df = df_tareas_escuela[
+            (df_tareas_escuela["Fecha_Inicio_dt"] > hoy_dt) & 
+            (df_tareas_escuela["Estado"].str.lower() != "completada")
+        ]
+
+        # --- ACTIVIDADES ATRASADAS ---
+        if not atrasadas_df.empty:
+            st.markdown("### ⚠️ Actividades Atrasadas")
+            for idx, row in atrasadas_df.iterrows():
+                orig_idx = row.name
+                f_ini_raw = str(row["Fecha Inicio"]).split("T")[0]
+                f_fin_raw = str(row["Fecha Fin"]).split("T")[0] if row["Fecha Fin"] else f_ini_raw
+                f_ini_fmt = formatear_fecha_corta(f_ini_raw)
+                f_fin_fmt = formatear_fecha_corta(f_fin_raw)
+                rango_fechas = f"📅 Del {f_ini_fmt} al {f_fin_fmt}" if f_ini_raw != f_fin_raw else f"📅 {f_ini_fmt}"
+                
+                with st.container(border=True):
+                    col_p1, col_p2, col_p3 = st.columns([3.5, 1, 0.8])
+                    with col_p1:
+                        st.markdown(f"**🏫 {row['Actividad']}** &nbsp;|&nbsp; *<small>{rango_fechas}</small>*", unsafe_allow_html=True)
+                    with col_p2:
+                        st.markdown("🔴 Atrasada", unsafe_allow_html=True)
+                    with col_p3:
+                        if st.button("✔️ Marcar Hecho", key=f"btn_esc_atrasada_{orig_idx}"):
+                            actualizar_estado_escuela(row["Actividad"], "Completada", row["Fecha Inicio"], row["Fecha Fin"])
+                            st.success("¡Completada!")
+                            st.rerun()
+
+        # --- PENDIENTES DE HOY ---
+        if not hoy_df.empty:
+            st.markdown("### 🔔 Actividades para Hoy")
+            for idx, row in hoy_df.iterrows():
+                orig_idx = row.name
+                f_ini_raw = str(row["Fecha Inicio"]).split("T")[0]
+                f_fin_raw = str(row["Fecha Fin"]).split("T")[0] if row["Fecha Fin"] else f_ini_raw
+                f_ini_fmt = formatear_fecha_corta(f_ini_raw)
+                f_fin_fmt = formatear_fecha_corta(f_fin_raw)
+                rango_fechas = f"📅 Del {f_ini_fmt} al {f_fin_fmt}" if f_ini_raw != f_fin_raw else f"📅 {f_ini_fmt}"
+                
+                with st.container(border=True):
+                    col_h1, col_h2, col_h3 = st.columns([3.5, 1, 0.8])
+                    with col_h1:
+                        st.markdown(f"**🏫 {row['Actividad']}** &nbsp;|&nbsp; *<small>{rango_fechas}</small>*", unsafe_allow_html=True)
+                    with col_h2:
+                        st.markdown("🟠 Pendiente Hoy", unsafe_allow_html=True)
+                    with col_h3:
+                        if st.button("✔️ Marcar Hecho", key=f"btn_esc_hoy_{orig_idx}"):
+                            actualizar_estado_escuela(row["Actividad"], "Completada", row["Fecha Inicio"], row["Fecha Fin"])
+                            st.success("¡Completada!")
+                            st.rerun()
+
+        # --- PRÓXIMAS ACTIVIDADES ---
+        if not futuras_df.empty:
+            st.markdown("### 🗓️ Próximas Actividades")
+            for idx, row in futuras_df.iterrows():
+                orig_idx = row.name
+                f_ini_raw = str(row["Fecha Inicio"]).split("T")[0]
+                f_fin_raw = str(row["Fecha Fin"]).split("T")[0] if row["Fecha Fin"] else f_ini_raw
+                f_ini_fmt = formatear_fecha_corta(f_ini_raw)
+                f_fin_fmt = formatear_fecha_corta(f_fin_raw)
+                rango_fechas = f"📅 Del {f_ini_fmt} al {f_fin_fmt}" if f_ini_raw != f_fin_raw else f"📅 {f_ini_fmt}"
+                
+                with st.container(border=True):
+                    col_f1, col_f2, col_f3 = st.columns([3.5, 1, 0.8])
+                    with col_f1:
+                        st.markdown(f"**🏫 {row['Actividad']}** &nbsp;|&nbsp; *<small>{rango_fechas}</small>*", unsafe_allow_html=True)
+                    with col_f2:
+                        st.markdown("🔵 Programada", unsafe_allow_html=True)
+                    with col_f3:
+                        if st.button("✔️ Marcar Hecho", key=f"btn_esc_futura_{orig_idx}"):
+                            actualizar_estado_escuela(row["Actividad"], "Completada", row["Fecha Inicio"], row["Fecha Fin"])
+                            st.success("¡Completada!")
+                            st.rerun()
+
+        st.markdown("---")
+
+        # --- CALENDARIO ESCOLAR ---
+        st.markdown("### 📅 Calendario de Actividades del Plantel")
+        st.markdown("""
+            <style>
+            .fc-list-event-time { display: none !important; }
+            .fc-view-harness { min-height: 600px !important; }
+            </style>
+        """, unsafe_allow_html=True)
+
+        calendar_events = []
+        for _, row in df_tareas_escuela.iterrows():
+            f_ini_raw = str(row["Fecha Inicio"]).split("T")[0]
+            f_fin_raw = str(row["Fecha Fin"]).split("T")[0] if row["Fecha Fin"] else f_ini_raw
+            try:
+                f_ini_dt = pd.to_datetime(f_ini_raw).strftime("%Y-%m-%d")
+                f_fin_dt = (pd.to_datetime(f_fin_raw) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+            except:
+                f_ini_dt = f_ini_raw
+                f_fin_dt = f_fin_raw
+
+            estado_evt = str(row["Estado"]).strip().lower()
+            color_evento = "#28a745" if estado_evt == "completada" else "#3788d8"
+
+            calendar_events.append({
+                "title": f"🏫 {row['Actividad']}",
+                "start": f_ini_dt,
+                "end": f_fin_dt,
+                "color": color_evento,
+                "allDay": True
+            })
+
+        calendar_options = {
+            "editable": False,
+            "selectable": True,
+            "headerToolbar": {
+                "left": "prev,next today",
+                "center": "title",
+                "right": "listFortnight,dayGridMonth"
+            },
+            "views": {
+                "listFortnight": { "type": "list", "duration": {"days": 15}, "buttonText": "Agenda Quincenal" },
+                "dayGridMonth": { "buttonText": "Mes" }
+            },
+            "initialView": "listFortnight",
+            "locale": "es",
+        }
+        calendar(events=calendar_events, options=calendar_options)
+    else:
+        st.info("No hay actividades públicas registradas por el administrador en este momento.")
+
+
+# ==========================================
+# SECCIÓN 2: MIS TAREAS COMPLETADAS
+# ==========================================
+elif menu_portal == "✅ Mis Tareas Completadas":
+    st.title(f"✅ Historial de Tareas Completadas - {nombre_pestana_escuela}")
+    st.markdown("Consulta todas las actividades que tu plantel ya ha concluido y reportado.")
+
+    completadas_escuela_df = df_tareas_escuela[df_tareas_escuela["Estado"].str.lower() == "completada"]
+
+    if not completadas_escuela_df.empty:
+        for idx, row in completadas_escuela_df.iterrows():
+            f_ini = formatear_fecha_corta(str(row["Fecha Inicio"]).split("T")[0])
+            f_fin = formatear_fecha_corta(str(row["Fecha Fin"]).split("T")[0])
+            rango = f"📅 Del {f_ini} al {f_fin}" if f_ini != f_fin else f"📅 {f_ini}"
+            
+            with st.container(border=True):
+                col_c1, col_c2 = st.columns([3.5, 1])
+                with col_c1:
+                    st.markdown(f"#### ✅ {row['Actividad']}")
+                    st.markdown(f"*<small>{rango}</small>*", unsafe_allow_html=True)
+                with col_c2:
+                    st.markdown("<br>**Estatus:** 🟢 Completada", unsafe_allow_html=True)
+    else:
+        st.info("Aún no tienes tareas marcadas como completadas. ¡Comienza a realizarlas desde tu panel principal!")
+
+
+# ==========================================
+# SECCIÓN 3: AVANCE Y COMPETENCIA ZONA
+# ==========================================
+elif menu_portal == "📊 Avance y Competencia Zona":
+    st.title("📊 Indicadores de Avance y Competencia - Zona 1")
+    st.markdown("Compara tu rendimiento con el de los demás planteles y mantén el liderazgo en la zona.")
+
+    # Calcular porcentajes de todas las escuelas en tiempo real
+    avances_zona = []
+    for i in range(1, 13):
+        p_name = f"ESCUELA {i}"
+        porcentaje_esc = 0
+        try:
+            ws_tmp = spreadsheet.worksheet(p_name)
+            dat_tmp = ws_tmp.get_all_records()
+            if dat_tmp:
+                df_tmp = pd.DataFrame(dat_tmp)
+                total_t = len(df_tmp)
+                if total_t > 0 and "Estado" in df_tmp.columns:
+                    comp_t = len(df_tmp[df_tmp["Estado"].str.lower() == "completada"])
+                    porcentaje_esc = int((comp_t / total_t) * 100)
+        except Exception:
+            pass
+        
+        is_current = (p_name == nombre_pestana_escuela)
+        avances_zona.append({"Escuela": p_name, "Porcentaje": porcentaje_esc, "Es_Actual": is_current})
+
+    df_avances_zona = pd.DataFrame(avances_zona)
+
+    # Obtener el porcentaje de la escuela actual
+    mi_porcentaje = df_avances_zona[df_avances_zona["Es_Actual"]]["Porcentaje"].values[0]
+
+    # --- MÉTRICA / TARJETA PRINCIPAL DEL PLANTEL ---
+    st.subheader(f"🎯 Tu Progreso Actual: {nombre_pestana_escuela}")
     
-    atrasadas_df = df_tareas_escuela[
-        (df_tareas_escuela["Fecha_Fin_dt"] < hoy_dt) & 
-        (df_tareas_escuela["Estado"].str.lower() != "completada")
-    ]
-    
-    hoy_df = df_tareas_escuela[
-        (df_tareas_escuela["Fecha_Inicio_dt"] <= hoy_dt) & 
-        (df_tareas_escuela["Fecha_Fin_dt"] >= hoy_dt) & 
-        (df_tareas_escuela["Estado"].str.lower() != "completada")
-    ]
-
-    futuras_df = df_tareas_escuela[
-        (df_tareas_escuela["Fecha_Inicio_dt"] > hoy_dt) & 
-        (df_tareas_escuela["Estado"].str.lower() != "completada")
-    ]
-
-    # --- 1. ACTIVIDADES ATRASADAS ---
-    if not atrasadas_df.empty:
-        st.markdown("### ⚠️ Actividades Atrasadas")
-        for idx, row in atrasadas_df.iterrows():
-            orig_idx = row.name
-            f_ini_raw = str(row["Fecha Inicio"]).split("T")[0]
-            f_fin_raw = str(row["Fecha Fin"]).split("T")[0] if row["Fecha Fin"] else f_ini_raw
-            f_ini_fmt = formatear_fecha_corta(f_ini_raw)
-            f_fin_fmt = formatear_fecha_corta(f_fin_raw)
-            
-            rango_fechas = f"📅 Del {f_ini_fmt} al {f_fin_fmt}" if f_ini_raw != f_fin_raw else f"📅 {f_ini_fmt}"
-            
-            with st.container(border=True):
-                col_p1, col_p2, col_p3 = st.columns([3.5, 1, 0.8])
-                with col_p1:
-                    st.markdown(f"**🏫 {row['Actividad']}** &nbsp;|&nbsp; *<small>{rango_fechas}</small>*", unsafe_allow_html=True)
-                with col_p2:
-                    st.markdown("🔴 Atrasada", unsafe_allow_html=True)
-                with col_p3:
-                    if st.button("✔️ Marcar Hecho", key=f"btn_esc_atrasada_{orig_idx}"):
-                        actualizar_estado_escuela(row["Actividad"], "Completada", row["Fecha Inicio"], row["Fecha Fin"])
-                        st.success("¡Completada!")
-                        st.rerun()
-
-    # --- 2. PENDIENTES DE HOY ---
-    if not hoy_df.empty:
-        st.markdown("### 🔔 Actividades para Hoy")
-        for idx, row in hoy_df.iterrows():
-            orig_idx = row.name
-            f_ini_raw = str(row["Fecha Inicio"]).split("T")[0]
-            f_fin_raw = str(row["Fecha Fin"]).split("T")[0] if row["Fecha Fin"] else f_ini_raw
-            f_ini_fmt = formatear_fecha_corta(f_ini_raw)
-            f_fin_fmt = formatear_fecha_corta(f_fin_raw)
-            
-            rango_fechas = f"📅 Del {f_ini_fmt} al {f_fin_fmt}" if f_ini_raw != f_fin_raw else f"📅 {f_ini_fmt}"
-            
-            with st.container(border=True):
-                col_h1, col_h2, col_h3 = st.columns([3.5, 1, 0.8])
-                with col_h1:
-                    st.markdown(f"**🏫 {row['Actividad']}** &nbsp;|&nbsp; *<small>{rango_fechas}</small>*", unsafe_allow_html=True)
-                with col_h2:
-                    st.markdown("🟠 Pendiente Hoy", unsafe_allow_html=True)
-                with col_h3:
-                    if st.button("✔️ Marcar Hecho", key=f"btn_esc_hoy_{orig_idx}"):
-                        actualizar_estado_escuela(row["Actividad"], "Completada", row["Fecha Inicio"], row["Fecha Fin"])
-                        st.success("¡Completada!")
-                        st.rerun()
-
-    # --- 3. PRÓXIMAS ACTIVIDADES ---
-    if not futuras_df.empty:
-        st.markdown("### 🗓️ Próximas Actividades")
-        for idx, row in futuras_df.iterrows():
-            orig_idx = row.name
-            f_ini_raw = str(row["Fecha Inicio"]).split("T")[0]
-            f_fin_raw = str(row["Fecha Fin"]).split("T")[0] if row["Fecha Fin"] else f_ini_raw
-            f_ini_fmt = formatear_fecha_corta(f_ini_raw)
-            f_fin_fmt = formatear_fecha_corta(f_fin_raw)
-            
-            rango_fechas = f"📅 Del {f_ini_fmt} al {f_fin_fmt}" if f_ini_raw != f_fin_raw else f"📅 {f_ini_fmt}"
-            
-            with st.container(border=True):
-                col_f1, col_f2, col_f3 = st.columns([3.5, 1, 0.8])
-                with col_f1:
-                    st.markdown(f"**🏫 {row['Actividad']}** &nbsp;|&nbsp; *<small>{rango_fechas}</small>*", unsafe_allow_html=True)
-                with col_f2:
-                    st.markdown("🔵 Programada", unsafe_allow_html=True)
-                with col_f3:
-                    if st.button("✔️ Marcar Hecho", key=f"btn_esc_futura_{orig_idx}"):
-                        actualizar_estado_escuela(row["Actividad"], "Completada", row["Fecha Inicio"], row["Fecha Fin"])
-                        st.success("¡Completada!")
-                        st.rerun()
+    col_m1, col_m2 = st.columns([1.5, 2.5])
+    with col_m1:
+        st.metric(label="Porcentaje de Cumplimiento", value=f"{mi_porcentaje}%")
+    with col_m2:
+        st.progress(mi_porcentaje / 100)
+        if mi_porcentaje == 100:
+            st.success("🎉 ¡Felicidades! Has alcanzado el 100% de cumplimiento.")
+        elif mi_porcentaje >= 70:
+            st.warning("🔥 ¡Excelente ritmo! Estás muy cerca de la meta.")
+        else:
+            st.info("💪 ¡Aún hay tiempo! Revisa tus pendientes y ponte al corriente.")
 
     st.markdown("---")
 
-    # --- CALENDARIO ESCOLAR (VISTAS MES Y AGENDA QUINCENAL) ---
-    st.markdown("### 📅 Calendario de Actividades del Plantel")
+    # --- SECCIÓN DE COMPETENCIA SANA (GRÁFICA DE BARRAS DE LA ZONA) ---
+    st.markdown("### 🏆 Tabla de Posiciones y Avance de la Zona 1")
+    st.markdown("Visualiza el estatus de cumplimiento de todos los planteles participantes:")
 
-    st.markdown("""
-        <style>
-        .fc-list-event-time {
-            display: none !important;
-        }
-        .fc-view-harness {
-            min-height: 600px !important;
-        }
-        </style>
-    """, unsafe_allow_html=True)
+    # Ordenar de mayor a menor porcentaje para la competencia sana
+    df_ranking = df_avances_zona.sort_values(by="Porcentaje", ascending=False).reset_index(drop=True)
 
-    calendar_events = []
-    for _, row in df_tareas_escuela.iterrows():
-        f_ini_raw = str(row["Fecha Inicio"]).split("T")[0]
-        f_fin_raw = str(row["Fecha Fin"]).split("T")[0] if row["Fecha Fin"] else f_ini_raw
-        
-        try:
-            f_ini_dt = pd.to_datetime(f_ini_raw).strftime("%Y-%m-%d")
-            f_fin_dt = (pd.to_datetime(f_fin_raw) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-        except:
-            f_ini_dt = f_ini_raw
-            f_fin_dt = f_fin_raw
+    # Mostrar gráfico de barras horizontales limpio
+    st.bar_chart(df_ranking.set_index("Escuela")[["Porcentaje"]], horizontal=True)
 
-        estado_evt = str(row["Estado"]).strip().lower()
-        color_evento = "#28a745" if estado_evt == "completada" else "#3788d8"
+    # Tabla detallada transparente
+    st.markdown("#### Detalle por Plantel")
+    
+    # Destacar visualmente la fila del plantel actual en la tabla
+    def destacar_actual(row):
+        if row["Escuela"] == nombre_pestana_escuela:
+            return ['background-color: #d4edda; font-weight: bold'] * len(row)
+        return [''] * len(row)
 
-        calendar_events.append({
-            "title": f"🏫 {row['Actividad']}",
-            "start": f_ini_dt,
-            "end": f_fin_dt,
-            "color": color_evento,
-            "allDay": True
-        })
-
-    calendar_options = {
-        "editable": False,
-        "selectable": True,
-        "headerToolbar": {
-            "left": "prev,next today",
-            "center": "title",
-            "right": "listFortnight,dayGridMonth"
-        },
-        "views": {
-            "listFortnight": {
-                "type": "list",
-                "duration": {"days": 15},
-                "buttonText": "Agenda Quincenal"
-            },
-            "dayGridMonth": {
-                "buttonText": "Mes"
-            }
-        },
-        "initialView": "listFortnight",
-        "locale": "es",
-    }
-
-    calendar(events=calendar_events, options=calendar_options)
-
-else:
-    st.info("No hay actividades públicas registradas por el administrador en este momento.")
+    st.dataframe(
+        df_ranking[["Escuela", "Porcentaje"]].style.apply(destacar_actual, axis=1),
+        use_container_width=True,
+        hide_index=True
+    )
