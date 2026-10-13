@@ -37,45 +37,74 @@ except Exception as e:
     st.error(f"Error al conectar con Google Sheets: {e}")
     st.stop()
 
-# --- SISTEMA DE SELECCIÓN DE ESCUELA (ESTILO TARJETA CENTRAL TIPO LOGIN) ---
-if "escuela_seleccionada" not in st.session_state:
-    st.session_state["escuela_seleccionada"] = None
+# --- CARGAR USUARIOS DESDE LA PESTAÑA 'INICIOS SESIÓN' ---
+def cargar_credenciales():
+    try:
+        sheet_cred = spreadsheet.worksheet("INICIOS SESIÓN")
+        data_cred = sheet_cred.get_all_records()
+        if data_cred:
+            df_cred = pd.DataFrame(data_cred)
+            df_cred.columns = [str(col).strip().upper() for col in df_cred.columns]
+            return df_cred
+    except Exception as e:
+        st.error(f"No se pudo cargar la pestaña 'INICIOS SESIÓN': {e}")
+    return pd.DataFrame()
 
-if st.session_state["escuela_seleccionada"] is None:
+df_usuarios = cargar_credenciales()
+
+# --- SISTEMA DE LOGIN CON CCT Y CONTRASEÑA ---
+if "cct_autenticado" not in st.session_state:
+    st.session_state["cct_autenticado"] = None
+
+if st.session_state["cct_autenticado"] is None:
     _, col_centro, _ = st.columns([1, 1.5, 1])
     with col_centro:
         st.markdown("<br><br>", unsafe_allow_html=True)
         with st.container(border=True):
             st.markdown("<h2 style='text-align: center;'>🏫 Portal Escolar - Zona 1</h2>", unsafe_allow_html=True)
-            st.markdown("<p style='text-align: center; color: gray;'>Sistema de Seguimiento y Control de Planteles</p>", unsafe_allow_html=True)
+            st.markdown("<p style='text-align: center; color: gray;'>Ingresa tus credenciales para acceder</p>", unsafe_allow_html=True)
             st.markdown("---")
             
-            opciones_escuelas = [f"ESCUELA {i}" for i in range(1, 13)]
-            plantel_elegido = st.selectbox("🏫 Selecciona tu Plantel", opciones_escuelas)
+            cct_input = st.text_input("🏫 CCT (Clave de Centro de Trabajo)", placeholder="Ej. 15DES00114").strip().upper()
+            pass_input = st.text_input("🔑 Contraseña", type="password", placeholder="Ingresa tu contraseña").strip()
             
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("🚀 Entrar al Panel", use_container_width=True):
-                st.session_state["escuela_seleccionada"] = plantel_elegido
-                st.rerun()
+            if st.button("🚀 Iniciar Sesión", use_container_width=True):
+                if cct_input and pass_input:
+                    if not df_usuarios.empty and "CCT" in df_usuarios.columns and "CONTRASEÑA" in df_usuarios.columns:
+                        usuario_valido = df_usuarios[
+                            (df_usuarios["CCT"].astype(str).str.strip().str.upper() == cct_input) & 
+                            (df_usuarios["CONTRASEÑA"].astype(str).str.strip() == pass_input)
+                        ]
+                        if not usuario_valido.empty:
+                            st.session_state["cct_autenticado"] = cct_input
+                            st.success("¡Acceso correcto!")
+                            st.rerun()
+                        else:
+                            st.error("❌ CCT o Contraseña incorrectos. Verifica tus datos.")
+                    else:
+                        st.error("No se encontró la columna 'CCT' o 'CONTRASEÑA' en la hoja 'INICIOS SESIÓN'.")
+                else:
+                    st.warning("Por favor, completa ambos campos.")
     st.stop()
 
-# Nombre de la pestaña de la escuela seleccionada
-nombre_pestana_escuela = st.session_state["escuela_seleccionada"]
+# CCT del usuario que inició sesión
+cct_usuario = st.session_state["cct_autenticado"]
 
 try:
-    sheet_escuela = spreadsheet.worksheet(nombre_pestana_escuela)
+    sheet_escuela = spreadsheet.worksheet(cct_usuario)
 except Exception as e:
-    st.error(f"No se encontró la pestaña '{nombre_pestana_escuela}' en el archivo de Google Sheets. Por favor, verifícalo.")
-    if st.button("🔄 Cambiar de Plantel"):
-        st.session_state["escuela_seleccionada"] = None
+    st.error(f"No se encontró la pestaña '{cct_usuario}' en el archivo de Google Sheets. Por favor, verifícalo.")
+    if st.button("🔄 Cerrar Sesión"):
+        st.session_state["cct_autenticado"] = None
         st.rerun()
     st.stop()
 
-# --- BARRA LATERAL: NAVEGACIÓN Y CAMBIO DE PLANTEL ---
+# --- BARRA LATERAL: NAVEGACIÓN Y CERRAR SESIÓN ---
 with st.sidebar:
     st.image("https://img.icons8.com/color/96/school.png", width=80)
     st.title("Portal Escolar")
-    st.markdown(f"Conectado a: **{nombre_pestana_escuela}**")
+    st.markdown(f"Plantel: **{cct_usuario}**")
     st.markdown("---")
     
     menu_portal = st.radio(
@@ -84,11 +113,11 @@ with st.sidebar:
     )
     
     st.markdown("---")
-    if st.button("🔄 Cambiar de Plantel", use_container_width=True):
-        st.session_state["escuela_seleccionada"] = None
+    if st.button("🔒 Cerrar Sesión", use_container_width=True):
+        st.session_state["cct_autenticado"] = None
         st.rerun()
 
-# --- CARGAR TAREAS PÚBLICAS DE LA HOJA PRINCIPAL Y CRUZARLAS CON EL ESTATUS DE LA ESCUELA ---
+# --- CARGAR TAREAS PÚBLICAS Y SINCRO CON PESTAÑA DEL CCT ---
 def cargar_datos_sincronizados():
     data_admin = sheet_principal.get_all_records()
     if not data_admin:
@@ -175,9 +204,6 @@ def crear_grafica_dona(porcentaje, titulo_centro=""):
     completado = porcentaje
     pendiente = 100 - porcentaje
     
-    # Si está a 0%, aseguramos que todo sea rojo (#dc3545) y verde (#198754) si hay avance
-    colores = ['#198754', '#dc3545'] if completado > 0 else ['#dc3545', '#ffffff00']
-    
     fig = go.Figure(data=[go.Pie(
         values=[completado, pendiente if completado > 0 else 100],
         labels=['Completado', 'Pendiente'],
@@ -203,7 +229,7 @@ def crear_grafica_dona(porcentaje, titulo_centro=""):
 # SECCIÓN 1: ACTIVIDADES Y CALENDARIO
 # ==========================================
 if menu_portal == "📌 Actividades y Calendario":
-    st.title(f"🏫 Panel de Seguimiento - {nombre_pestana_escuela}")
+    st.title(f"🏫 Panel de Seguimiento - {cct_usuario}")
     st.markdown("Consulta tus actividades públicas asignadas por la supervisión, revisa fechas límite y marca tu progreso.")
 
     if not df_tareas_escuela.empty:
@@ -353,7 +379,7 @@ if menu_portal == "📌 Actividades y Calendario":
 # SECCIÓN 2: MIS TAREAS COMPLETADAS
 # ==========================================
 elif menu_portal == "✅ Mis Tareas Completadas":
-    st.title(f"✅ Historial de Tareas Completadas - {nombre_pestana_escuela}")
+    st.title(f"✅ Historial de Tareas Completadas - {cct_usuario}")
     st.markdown("Consulta todas las actividades que tu plantel ya ha concluido y reportado.")
 
     completadas_escuela_df = df_tareas_escuela[df_tareas_escuela["Estado"].str.lower() == "completada"]
@@ -382,13 +408,13 @@ elif menu_portal == "📊 Avance de la Zona":
     st.title("📊 Indicadores de Avance - Zona 1")
     st.markdown("Monitorea tu rendimiento y el de los demás planteles de la zona.")
 
-    # Calcular porcentajes de todas las escuelas en tiempo real
+    lista_ccts = df_usuarios["CCT"].astype(str).str.strip().unique().tolist() if not df_usuarios.empty and "CCT" in df_usuarios.columns else []
+
     avances_zona = []
-    for i in range(1, 13):
-        p_name = f"ESCUELA {i}"
+    for cct_item in lista_ccts:
         porcentaje_esc = 0
         try:
-            ws_tmp = spreadsheet.worksheet(p_name)
+            ws_tmp = spreadsheet.worksheet(cct_item)
             dat_tmp = ws_tmp.get_all_records()
             if dat_tmp:
                 df_tmp = pd.DataFrame(dat_tmp)
@@ -399,14 +425,17 @@ elif menu_portal == "📊 Avance de la Zona":
         except Exception:
             pass
         
-        is_current = (p_name == nombre_pestana_escuela)
-        avances_zona.append({"Escuela": p_name, "Porcentaje": porcentaje_esc, "Es_Actual": is_current})
+        is_current = (cct_item == cct_usuario)
+        avances_zona.append({"Escuela": cct_item, "Porcentaje": porcentaje_esc, "Es_Actual": is_current})
 
     df_avances_zona = pd.DataFrame(avances_zona)
-    mi_porcentaje = df_avances_zona[df_avances_zona["Es_Actual"]]["Porcentaje"].values[0]
+    
+    mi_porcentaje = 0
+    if not df_avances_zona.empty and any(df_avances_zona["Es_Actual"]):
+        mi_porcentaje = df_avances_zona[df_avances_zona["Es_Actual"]]["Porcentaje"].values[0]
 
     # --- GRÁFICA CIRCULAR PRINCIPAL (TU PLANTEL) ---
-    st.subheader(f"🎯 Tu Progreso Actual: {nombre_pestana_escuela}")
+    st.subheader(f"🎯 Tu Progreso Actual: {cct_usuario}")
     
     col_g1, col_g2 = st.columns([1.2, 2.8])
     with col_g1:
@@ -427,7 +456,6 @@ elif menu_portal == "📊 Avance de la Zona":
     st.markdown("### 📈 Avance de la Zona 1")
     st.markdown("Estatus de cumplimiento de todos los planteles de la zona:")
 
-    # Mostrar las 12 escuelas en una cuadrícula de 3 columnas con gráficas circulares
     cols = st.columns(3)
     for idx, row in df_avances_zona.iterrows():
         esc_nombre = row["Escuela"]
@@ -435,7 +463,6 @@ elif menu_portal == "📊 Avance de la Zona":
         
         with cols[idx % 3]:
             with st.container(border=True):
-                # Si es la escuela actual, resaltamos el título con un ícono especial
-                titulo_etiqueta = f"⭐ {esc_nombre}" if esc_nombre == nombre_pestana_escuela else esc_nombre
-                fig_dona = crear_grafica_dona(esc_porc, esc_nombre)
-                st.plotly_chart(fig_dona, use_container_width=True)
+                titulo_etiqueta = f"⭐ {esc_nombre}" if esc_nombre == cct_usuario else esc_nombre
+                fig_dona = crear_grafica_dona(esc_porc, titulo_etiqueta)
+                st.plotly_chart(fig_dona, use_container_width=True, key=f"esc_dona_{idx}")
