@@ -11,7 +11,8 @@ st.set_page_config(
     page_title="Portal Escolar - Zona 1", page_icon="🏫", layout="wide"
 )
 
-# --- CONEXIÓN DIRECTA A GOOGLE SHEETS ---
+# --- CONEXIÓN DIRECTA A GOOGLE SHEETS CON CACHÉ ---
+@st.cache_resource
 def conectar_gspread():
     scope = [
         "https://www.googleapis.com/auth/spreadsheets",
@@ -37,7 +38,8 @@ except Exception as e:
     st.error(f"Error al conectar con Google Sheets: {e}")
     st.stop()
 
-# --- CARGAR USUARIOS DESDE LA PESTAÑA 'INICIOS SESIÓN' ---
+# --- CARGAR USUARIOS DESDE 'INICIOS SESIÓN' CON CACHÉ (5 MINUTOS) ---
+@st.cache_data(ttl=300)
 def cargar_credenciales():
     try:
         sheet_cred = spreadsheet.worksheet("INICIOS SESIÓN")
@@ -117,8 +119,10 @@ with st.sidebar:
         st.session_state["cct_autenticado"] = None
         st.rerun()
 
-# --- CARGAR TAREAS PÚBLICAS Y SINCRO CON PESTAÑA DEL CCT ---
-def cargar_datos_sincronizados():
+# --- CARGAR TAREAS PÚBLICAS Y SINCRO CON PESTAÑA DEL CCT (CACHÉ DUAL DE 30 SEG) ---
+@st.cache_data(ttl=30)
+def cargar_datos_sincronizados(cct):
+    ws_esc = spreadsheet.worksheet(cct)
     data_admin = sheet_principal.get_all_records()
     if not data_admin:
         return pd.DataFrame(columns=["Actividad", "Fecha Inicio", "Fecha Fin", "Privado", "Estado", "Fila_Admin"])
@@ -145,7 +149,7 @@ def cargar_datos_sincronizados():
 
     df_publicas["Fila_Admin"] = df_publicas.index + 2
 
-    data_escuela = sheet_escuela.get_all_records()
+    data_escuela = ws_esc.get_all_records()
     df_escuela_registros = pd.DataFrame(data_escuela) if data_escuela else pd.DataFrame(columns=["Actividad", "Estado"])
     
     if not df_escuela_registros.empty:
@@ -170,7 +174,7 @@ def cargar_datos_sincronizados():
 
     return df_publicas
 
-df_tareas_escuela = cargar_datos_sincronizados()
+df_tareas_escuela = cargar_datos_sincronizados(cct_usuario)
 
 def actualizar_estado_escuela(nombre_actividad, nuevo_estado, f_inicio, f_fin):
     data_esc = sheet_escuela.get_all_records()
@@ -186,6 +190,9 @@ def actualizar_estado_escuela(nombre_actividad, nuevo_estado, f_inicio, f_fin):
                 
     if not encontrado:
         sheet_escuela.append_row([nombre_actividad, f_inicio, f_fin, "FALSE", nuevo_estado])
+
+    # Limpiar caché para reflejar el cambio de inmediato
+    st.cache_data.clear()
 
 def formatear_fecha_corta(fecha_val):
     if not fecha_val or str(fecha_val).strip() == "":
@@ -402,37 +409,40 @@ elif menu_portal == "✅ Mis Tareas Completadas":
 
 
 # ==========================================
-# SECCIÓN 3: AVANCE DE LA ZONA
+# SECCIÓN 3: AVANCE DE LA ZONA (CON CACHÉ)
 # ==========================================
 elif menu_portal == "📊 Avance de la Zona":
     st.title("📊 Indicadores de Avance - Zona 1")
     st.markdown("Monitorea tu rendimiento y el de los demás planteles de la zona.")
 
-    lista_ccts = df_usuarios["CCT"].astype(str).str.strip().unique().tolist() if not df_usuarios.empty and "CCT" in df_usuarios.columns else []
+    @st.cache_data(ttl=60)
+    def calcular_avances_zona_rapido():
+        lista_ccts = df_usuarios["CCT"].astype(str).str.strip().unique().tolist() if not df_usuarios.empty and "CCT" in df_usuarios.columns else []
+        avances = []
+        for cct_item in lista_ccts:
+            porcentaje_esc = 0
+            try:
+                ws_tmp = spreadsheet.worksheet(cct_item)
+                dat_tmp = ws_tmp.get_all_records()
+                if dat_tmp:
+                    df_tmp = pd.DataFrame(dat_tmp)
+                    total_t = len(df_tmp)
+                    if total_t > 0 and "Estado" in df_tmp.columns:
+                        comp_t = len(df_tmp[df_tmp["Estado"].str.lower() == "completada"])
+                        porcentaje_esc = int((comp_t / total_t) * 100)
+            except Exception:
+                pass
+            
+            avances.append({"Escuela": cct_item, "Porcentaje": porcentaje_esc})
+        return avances
 
-    avances_zona = []
-    for cct_item in lista_ccts:
-        porcentaje_esc = 0
-        try:
-            ws_tmp = spreadsheet.worksheet(cct_item)
-            dat_tmp = ws_tmp.get_all_records()
-            if dat_tmp:
-                df_tmp = pd.DataFrame(dat_tmp)
-                total_t = len(df_tmp)
-                if total_t > 0 and "Estado" in df_tmp.columns:
-                    comp_t = len(df_tmp[df_tmp["Estado"].str.lower() == "completada"])
-                    porcentaje_esc = int((comp_t / total_t) * 100)
-        except Exception:
-            pass
-        
-        is_current = (cct_item == cct_usuario)
-        avances_zona.append({"Escuela": cct_item, "Porcentaje": porcentaje_esc, "Es_Actual": is_current})
-
-    df_avances_zona = pd.DataFrame(avances_zona)
+    df_avances_zona = pd.DataFrame(calcular_avances_zona_rapido())
     
     mi_porcentaje = 0
-    if not df_avances_zona.empty and any(df_avances_zona["Es_Actual"]):
-        mi_porcentaje = df_avances_zona[df_avances_zona["Es_Actual"]]["Porcentaje"].values[0]
+    if not df_avances_zona.empty and "Escuela" in df_avances_zona.columns:
+        match_actual = df_avances_zona[df_avances_zona["Escuela"] == cct_usuario]
+        if not match_actual.empty:
+            mi_porcentaje = match_actual["Porcentaje"].values[0]
 
     # --- GRÁFICA CIRCULAR PRINCIPAL (TU PLANTEL) ---
     st.subheader(f"🎯 Tu Progreso Actual: {cct_usuario}")
